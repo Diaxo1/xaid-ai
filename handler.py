@@ -120,6 +120,7 @@ def run_realesrgan(
         "xaid",
         "--tile",
         str(tile),
+        "--extract_frame_first",
     ]
 
     print(
