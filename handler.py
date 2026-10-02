@@ -15,15 +15,16 @@ REAL_ESRGAN_DIR = Path(
 
 
 def progress(job_id: str, percent: int, message: str) -> None:
-    """Send progress to RunPod without turning the whole handler into a stream."""
+    """Send progress to RunPod without breaking the render if reporting fails."""
     try:
         runpod.serverless.progress_update(
             job_id,
-            percent,
-            message,
+            {
+                "progress": percent,
+                "message": message,
+            },
         )
     except Exception as exc:
-        # Progress reporting must never kill an otherwise valid render.
         print(
             f"[XAID] progress update failed: {exc}",
             flush=True,
