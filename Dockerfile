@@ -6,19 +6,23 @@ ENV DEBIAN_FRONTEND=noninteractive \
     REAL_ESRGAN_DIR=/opt/Real-ESRGAN
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ffmpeg libgl1 libglib2.0-0 \
+    git \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 https://github.com/xinntao/Real-ESRGAN.git /opt/Real-ESRGAN
+
 WORKDIR /opt/Real-ESRGAN
 
+# Keep the CUDA-enabled PyTorch from the base image. Install Real-ESRGAN's
+# Python dependencies without reinstalling torch/torchvision from PyPI.
 RUN pip install --upgrade pip setuptools wheel && \
-    pip install basicsr facexlib gfpgan && \
-    pip install -r requirements.txt && \
-    pip install -e . && \
-    pip install runpod boto3 requests opencv-python-headless ffmpeg-python
+    pip install --no-cache-dir basicsr facexlib gfpgan runpod boto3 requests opencv-python-headless ffmpeg-python && \
+    pip install --no-cache-dir -e .
 
 WORKDIR /app
 COPY handler.py /app/handler.py
 
-CMD ["python", "/app/handler.py"]
+CMD ["python", "-u", "/app/handler.py"]
