@@ -22,6 +22,8 @@ RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir basicsr facexlib gfpgan runpod boto3 requests opencv-python-headless ffmpeg-python && \
     pip install --no-cache-dir -e .
 
+RUN python -c "import torch, torchvision; print('TORCH:', torch.__version__); print('TORCHVISION:', torchvision.__version__)"
+
 WORKDIR /app
 COPY handler.py /app/handler.py
 COPY runpod_handler.py /app/runpod_handler.py
