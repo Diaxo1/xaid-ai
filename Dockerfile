@@ -24,5 +24,6 @@ RUN pip install --upgrade pip setuptools wheel && \
 
 WORKDIR /app
 COPY handler.py /app/handler.py
+COPY runpod_handler.py /app/runpod_handler.py
 
-CMD ["python", "-u", "/app/handler.py"]
+CMD ["python", "-u", "/app/runpod_handler.py"]
