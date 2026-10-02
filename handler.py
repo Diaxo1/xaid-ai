@@ -14,15 +14,12 @@ REAL_ESRGAN_DIR = Path(
 )
 
 
-def progress(job_id: str, percent: int, message: str) -> None:
+def progress(job, percent: int, message: str) -> None:
     """Send progress to RunPod without breaking the render if reporting fails."""
     try:
         runpod.serverless.progress_update(
-            job_id,
-            {
-                "progress": percent,
-                "message": message,
-            },
+            job,
+            f"{percent}% — {message}",
         )
     except Exception as exc:
         print(
@@ -97,7 +94,7 @@ def run_realesrgan(
     scale: int,
     denoise: float,
     tile: int,
-    job_id: str,
+    job,
 ) -> Path:
     """
     Run the official Real-ESRGAN video inference script.
@@ -143,7 +140,7 @@ def run_realesrgan(
     current_progress = 10
 
     progress(
-        job_id,
+        job,
         current_progress,
         "AI enhancement in progress",
     )
@@ -168,7 +165,7 @@ def run_realesrgan(
                 )
 
                 progress(
-                    job_id,
+                    job,
                     current_progress,
                     "AI enhancement in progress",
                 )
@@ -318,7 +315,7 @@ def handler(job):
         # -----------------------------------------------------
 
         progress(
-            job_id,
+            job,
             2,
             "Downloading video",
         )
@@ -333,7 +330,7 @@ def handler(job):
         # -----------------------------------------------------
 
         progress(
-            job_id,
+            job,
             8,
             "Starting AI enhancement",
         )
@@ -344,7 +341,7 @@ def handler(job):
             scale=scale,
             denoise=denoise,
             tile=tile,
-            job_id=job_id,
+            job=job,
         )
 
         # -----------------------------------------------------
@@ -352,7 +349,7 @@ def handler(job):
         # -----------------------------------------------------
 
         progress(
-            job_id,
+            job,
             92,
             "Uploading enhanced video",
         )
@@ -368,7 +365,7 @@ def handler(job):
         # -----------------------------------------------------
 
         progress(
-            job_id,
+            job,
             100,
             "Enhancement complete",
         )
