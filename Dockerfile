@@ -22,6 +22,9 @@ RUN pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir basicsr facexlib gfpgan runpod boto3 requests opencv-python-headless ffmpeg-python && \
     pip install --no-cache-dir -e .
 
+RUN sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' \
+    /opt/conda/lib/python3.11/site-packages/basicsr/data/degradations.py    
+
 RUN python -c "import torch, torchvision; print('TORCH:', torch.__version__); print('TORCHVISION:', torchvision.__version__)"
 
 WORKDIR /app
