@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import boto3
@@ -147,6 +148,7 @@ def run_realesrgan(
     )
 
     current_progress = 10
+    last_progress_time = time.monotonic()
     progress(job, current_progress, "AI enhancement in progress")
 
     if process.stdout:
@@ -156,12 +158,23 @@ def run_realesrgan(
             lower_line = line.lower()
 
             if "inference:" in lower_line or "frame" in lower_line:
-                current_progress = min(88, current_progress + 1)
-                progress(
-                    job,
-                    current_progress,
-                    "AI enhancement in progress",
-                )
+                next_progress = min(88, current_progress + 1)
+                now = time.monotonic()
+
+                # RunPod progress updates are asynchronous. Throttle them so
+                # Real-ESRGAN's frame-by-frame output cannot flood the
+                # progress endpoint or race with the final job result.
+                if next_progress > current_progress and (
+                    now - last_progress_time >= 1.0
+                    or next_progress >= 88
+                ):
+                    current_progress = next_progress
+                    last_progress_time = now
+                    progress(
+                        job,
+                        current_progress,
+                        "AI enhancement in progress",
+                    )
 
     return_code = process.wait()
 
@@ -425,8 +438,6 @@ def handler(job):
             output_key,
             final_path,
         )
-
-        progress(job, 100, "Enhancement complete")
 
         return {
             "job_id": job_id,
