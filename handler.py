@@ -30,10 +30,7 @@ def progress(job, percent: int, message: str) -> None:
 
 def download(url: str, target: Path) -> None:
     """Download the source video to the worker's temporary directory."""
-    print(
-        f"[XAID] downloading input: {url}",
-        flush=True,
-    )
+    print(f"[XAID] downloading input: {url}", flush=True)
 
     with requests.get(
         url,
@@ -50,27 +47,16 @@ def download(url: str, target: Path) -> None:
                     handle.write(chunk)
 
 
-def upload(
-    bucket: str,
-    key: str,
-    source: Path,
-) -> None:
-    """Upload the enhanced MP4 to S3-compatible storage."""
+def upload(bucket: str, key: str, source: Path) -> None:
+    """Upload the final enhanced MP4 to S3-compatible storage."""
     endpoint = os.environ.get("XAID_S3_ENDPOINT")
 
     s3 = boto3.client(
         "s3",
         endpoint_url=endpoint or None,
-        region_name=os.environ.get(
-            "XAID_S3_REGION",
-            "auto",
-        ),
-        aws_access_key_id=os.environ[
-            "XAID_S3_ACCESS_KEY_ID"
-        ],
-        aws_secret_access_key=os.environ[
-            "XAID_S3_SECRET_ACCESS_KEY"
-        ],
+        region_name=os.environ.get("XAID_S3_REGION", "auto"),
+        aws_access_key_id=os.environ["XAID_S3_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["XAID_S3_SECRET_ACCESS_KEY"],
     )
 
     print(
@@ -82,10 +68,37 @@ def upload(
         str(source),
         bucket,
         key,
-        ExtraArgs={
-            "ContentType": "video/mp4",
-        },
+        ExtraArgs={"ContentType": "video/mp4"},
     )
+
+
+def run_command(command: list[str], cwd: Path | None = None) -> None:
+    """Run a command and raise a useful error if it fails."""
+    print(
+        "[XAID] running:",
+        " ".join(command),
+        flush=True,
+    )
+
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    if process.stdout:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+
+    return_code = process.wait()
+
+    if return_code != 0:
+        raise RuntimeError(
+            f"Command exited with code {return_code}: {' '.join(command)}"
+        )
 
 
 def run_realesrgan(
@@ -96,16 +109,10 @@ def run_realesrgan(
     tile: int,
     job,
 ) -> Path:
-    """
-    Run the official Real-ESRGAN video inference script.
-    """
-
+    """Run the official Real-ESRGAN video inference script."""
     command = [
         "python",
-        str(
-            REAL_ESRGAN_DIR
-            / "inference_realesrgan_video.py"
-        ),
+        str(REAL_ESRGAN_DIR / "inference_realesrgan_video.py"),
         "-i",
         str(input_path),
         "-n",
@@ -139,32 +146,16 @@ def run_realesrgan(
     )
 
     current_progress = 10
-
-    progress(
-        job,
-        current_progress,
-        "AI enhancement in progress",
-    )
+    progress(job, current_progress, "AI enhancement in progress")
 
     if process.stdout:
         for line in process.stdout:
-            print(
-                line,
-                end="",
-                flush=True,
-            )
+            print(line, end="", flush=True)
 
             lower_line = line.lower()
 
-            if (
-                "inference:" in lower_line
-                or "frame" in lower_line
-            ):
-                current_progress = min(
-                    88,
-                    current_progress + 1,
-                )
-
+            if "inference:" in lower_line or "frame" in lower_line:
+                current_progress = min(88, current_progress + 1)
                 progress(
                     job,
                     current_progress,
@@ -178,9 +169,7 @@ def run_realesrgan(
             f"Real-ESRGAN exited with code {return_code}"
         )
 
-    outputs = sorted(
-        output_dir.glob("*.mp4")
-    )
+    outputs = sorted(output_dir.glob("*.mp4"))
 
     if not outputs:
         raise RuntimeError(
@@ -190,25 +179,135 @@ def run_realesrgan(
     return outputs[0]
 
 
+def get_effective_settings(settings: dict) -> tuple[int, float, int, str, int]:
+    """Convert XAID UI settings into actual worker processing settings."""
+    preset = str(settings.get("preset", "Auto Enhance"))
+
+    detail = float(settings.get("detail", 72))
+    noise = float(settings.get("noise", 18))
+    sharpen = float(settings.get("sharpen", 42))
+
+    detail = max(0.0, min(100.0, detail))
+    noise = max(0.0, min(100.0, noise))
+    sharpen = max(0.0, min(100.0, sharpen))
+
+    # Presets now affect the actual GPU render instead of only the UI.
+    if preset == "Gaming":
+        detail = max(detail, 78.0)
+        noise = min(noise, 12.0)
+        sharpen = max(sharpen, 58.0)
+    elif preset == "Clean":
+        detail = max(detail - 8.0, 35.0)
+        noise = max(noise, 42.0)
+        sharpen = min(sharpen, 30.0)
+    elif preset == "Detail":
+        detail = max(detail, 88.0)
+        noise = min(noise, 10.0)
+        sharpen = max(sharpen, 72.0)
+
+    scale_text = str(settings.get("scale", "2×"))
+
+    if scale_text == "Original":
+        scale = 1
+    elif "4" in scale_text:
+        scale = 4
+    else:
+        scale = 2
+
+    fps_text = str(settings.get("fps", "Original"))
+    if fps_text == "Original":
+        output_fps = 0
+    else:
+        try:
+            output_fps = max(1, min(120, int(fps_text)))
+        except ValueError:
+            output_fps = 0
+
+    # Real-ESRGAN's denoise control is 0..1.
+    denoise = noise / 100.0
+
+    # Detail + sharpen are applied in the final FFmpeg stage.
+    # This keeps both sliders meaningful without pretending they are
+    # native Real-ESRGAN parameters.
+    sharpen_strength = (
+        (detail / 100.0) * 0.75
+        + (sharpen / 100.0) * 1.25
+    )
+    sharpen_strength = max(0.0, min(2.0, sharpen_strength))
+
+    return scale, denoise, output_fps, preset, sharpen_strength
+
+
+def finalize_video(
+    enhanced_path: Path,
+    original_path: Path,
+    final_path: Path,
+    output_fps: int,
+    sharpen_strength: float,
+    job,
+) -> Path:
+    """Restore original audio and apply final FPS/sharpen processing."""
+    filters: list[str] = []
+
+    if output_fps > 0:
+        filters.append(f"fps={output_fps}")
+
+    if sharpen_strength > 0.01:
+        # FFmpeg unsharp amount is intentionally kept moderate to avoid
+        # turning compression/noise into harsh edges.
+        amount = min(2.0, max(0.1, sharpen_strength))
+        filters.append(
+            f"unsharp=5:5:{amount:.2f}:5:5:0"
+        )
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(enhanced_path),
+        "-i",
+        str(original_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a?",
+    ]
+
+    if filters:
+        command.extend(["-vf", ",".join(filters)])
+
+    command.extend(
+        [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            "-shortest",
+            str(final_path),
+        ]
+    )
+
+    progress(job, 90, "Finalizing video and restoring audio")
+    run_command(command)
+
+    if not final_path.exists() or final_path.stat().st_size == 0:
+        raise RuntimeError("FFmpeg completed but produced no final MP4.")
+
+    return final_path
+
+
 def handler(job):
-    """
-    Main RunPod Serverless job handler.
-
-    Expected input:
-
-    {
-        "input": {
-            "input_url": "...",
-            "output_bucket": "...",
-            "output_key": "...",
-            "settings": {
-                "scale": "2×",
-                "noise": 18
-            }
-        }
-    }
-    """
-
+    """Main RunPod Serverless job handler."""
     job_input = job.get("input") or {}
 
     job_id = str(
@@ -223,118 +322,47 @@ def handler(job):
     settings = job_input.get("settings") or {}
 
     if not input_url:
-        raise ValueError(
-            "input_url is required"
-        )
+        raise ValueError("input_url is required")
 
     if not bucket:
-        raise ValueError(
-            "output_bucket is required"
-        )
+        raise ValueError("output_bucket is required")
 
     if not output_key:
-        raise ValueError(
-            "output_key is required"
-        )
+        raise ValueError("output_key is required")
 
-    # ---------------------------------------------------------
-    # XAID enhancement settings
-    # ---------------------------------------------------------
-
-    scale_text = str(
-        settings.get(
-            "scale",
-            "2×",
-        )
+    scale, denoise, output_fps, preset, sharpen_strength = get_effective_settings(
+        settings
     )
 
-    scale = (
-        4
-        if "4" in scale_text
-        else 2
+    print(
+        "[XAID] effective settings:",
+        {
+            "preset": preset,
+            "scale": scale,
+            "fps": output_fps or "original",
+            "denoise": round(denoise, 3),
+            "sharpen": round(sharpen_strength, 3),
+        },
+        flush=True,
     )
 
-    noise = float(
-        settings.get(
-            "noise",
-            18,
-        )
-    )
-
-    denoise = max(
-        0.0,
-        min(
-            1.0,
-            noise / 100.0,
-        ),
-    )
-
-    # Keep this worker focused on the first real AI milestone:
-    #
-    # Real-ESRGAN upscale
-    # +
-    # denoise
-    # +
-    # audio-preserving MP4 output
-    #
-    # FPS/frame interpolation will be added
-    # as a separate processing stage later.
-
-    tile = int(
-        os.environ.get(
-            "XAID_TILE",
-            "0",
-        )
-    )
-
-    # ---------------------------------------------------------
-    # Temporary working directory
-    # ---------------------------------------------------------
+    tile = int(os.environ.get("XAID_TILE", "0"))
 
     work_dir = Path(
-        tempfile.mkdtemp(
-            prefix=f"xaid-{job_id}-"
-        )
+        tempfile.mkdtemp(prefix=f"xaid-{job_id}-")
     )
 
-    input_path = (
-        work_dir / "input.mp4"
-    )
+    input_path = work_dir / "input.mp4"
+    output_dir = work_dir / "results"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_dir = (
-        work_dir / "results"
-    )
-
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    final_path = work_dir / "enhanced-final.mp4"
 
     try:
-        # -----------------------------------------------------
-        # Download
-        # -----------------------------------------------------
+        progress(job, 2, "Downloading video")
+        download(input_url, input_path)
 
-        progress(
-            job,
-            2,
-            "Downloading video",
-        )
-
-        download(
-            input_url,
-            input_path,
-        )
-
-        # -----------------------------------------------------
-        # AI enhancement
-        # -----------------------------------------------------
-
-        progress(
-            job,
-            8,
-            "Starting AI enhancement",
-        )
+        progress(job, 8, "Starting AI enhancement")
 
         enhanced_path = run_realesrgan(
             input_path=input_path,
@@ -345,31 +373,26 @@ def handler(job):
             job=job,
         )
 
-        # -----------------------------------------------------
-        # Upload result
-        # -----------------------------------------------------
+        progress(job, 89, "AI enhancement complete")
 
-        progress(
-            job,
-            92,
-            "Uploading enhanced video",
+        finalize_video(
+            enhanced_path=enhanced_path,
+            original_path=input_path,
+            final_path=final_path,
+            output_fps=output_fps,
+            sharpen_strength=sharpen_strength,
+            job=job,
         )
+
+        progress(job, 94, "Uploading enhanced video")
 
         upload(
             bucket,
             output_key,
-            enhanced_path,
+            final_path,
         )
 
-        # -----------------------------------------------------
-        # Complete
-        # -----------------------------------------------------
-
-        progress(
-            job,
-            100,
-            "Enhancement complete",
-        )
+        progress(job, 100, "Enhancement complete")
 
         return {
             "job_id": job_id,
@@ -381,8 +404,6 @@ def handler(job):
         }
 
     finally:
-        # Always remove temporary files
-        # after the job finishes.
         shutil.rmtree(
             work_dir,
             ignore_errors=True,
