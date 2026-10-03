@@ -107,6 +107,7 @@ def run_realesrgan(
     scale: int,
     denoise: float,
     tile: int,
+    model: str,
     job,
 ) -> Path:
     """Run the official Real-ESRGAN video inference script."""
@@ -116,7 +117,7 @@ def run_realesrgan(
         "-i",
         str(input_path),
         "-n",
-        "realesr-general-x4v3",
+        model,
         "-o",
         str(output_dir),
         "-s",
@@ -179,7 +180,9 @@ def run_realesrgan(
     return outputs[0]
 
 
-def get_effective_settings(settings: dict) -> tuple[int, float, int, str, int]:
+def get_effective_settings(
+    settings: dict,
+) -> tuple[int, float, int, str, float, str]:
     """Convert XAID UI settings into actual worker processing settings."""
     preset = str(settings.get("preset", "Auto Enhance"))
 
@@ -191,7 +194,7 @@ def get_effective_settings(settings: dict) -> tuple[int, float, int, str, int]:
     noise = max(0.0, min(100.0, noise))
     sharpen = max(0.0, min(100.0, sharpen))
 
-    # Presets now affect the actual GPU render instead of only the UI.
+    # Presets affect the actual GPU render.
     if preset == "Gaming":
         detail = max(detail, 78.0)
         noise = min(noise, 12.0)
@@ -207,6 +210,8 @@ def get_effective_settings(settings: dict) -> tuple[int, float, int, str, int]:
 
     scale_text = str(settings.get("scale", "2×"))
 
+    # "Original" means no upscaling. Real-ESRGAN can still enhance
+    # at native output dimensions by using an outscale of 1.
     if scale_text == "Original":
         scale = 1
     elif "4" in scale_text:
@@ -223,20 +228,37 @@ def get_effective_settings(settings: dict) -> tuple[int, float, int, str, int]:
         except ValueError:
             output_fps = 0
 
+    # Supported Real-ESRGAN models.
+    model = str(settings.get("model", "realesr-general-x4v3"))
+
+    allowed_models = {
+        "realesr-general-x4v3",
+        "RealESRGAN_x4plus",
+        "realesr-animevideov3",
+        "RealESRGAN_x4plus_anime_6B",
+    }
+
+    if model not in allowed_models:
+        model = "realesr-general-x4v3"
+
     # Real-ESRGAN's denoise control is 0..1.
     denoise = noise / 100.0
 
     # Detail + sharpen are applied in the final FFmpeg stage.
-    # This keeps both sliders meaningful without pretending they are
-    # native Real-ESRGAN parameters.
     sharpen_strength = (
         (detail / 100.0) * 0.75
         + (sharpen / 100.0) * 1.25
     )
     sharpen_strength = max(0.0, min(2.0, sharpen_strength))
 
-    return scale, denoise, output_fps, preset, sharpen_strength
-
+    return (
+        scale,
+        denoise,
+        output_fps,
+        preset,
+        sharpen_strength,
+        model,
+    )
 
 def finalize_video(
     enhanced_path: Path,
@@ -330,8 +352,18 @@ def handler(job):
     if not output_key:
         raise ValueError("output_key is required")
 
-    scale, denoise, output_fps, preset, sharpen_strength = get_effective_settings(
-        settings
+    (
+        scale,
+        denoise,
+        output_fps,
+        preset,
+        sharpen_strength,
+        model,
+    ) = get_effective_settings(settings)
+
+    print(
+        "[XAID] selected Real-ESRGAN model:", model,
+        flush=True,
     )
 
     print(
@@ -342,6 +374,7 @@ def handler(job):
             "fps": output_fps or "original",
             "denoise": round(denoise, 3),
             "sharpen": round(sharpen_strength, 3),
+            "model": model,
         },
         flush=True,
     )
@@ -370,6 +403,7 @@ def handler(job):
             scale=scale,
             denoise=denoise,
             tile=tile,
+            model=model,
             job=job,
         )
 
